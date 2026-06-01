@@ -1,0 +1,31 @@
+# ══════════════════════════════════════════════════════════
+#  Digital Debate Arena – docker-compose
+#  Usage: docker compose up --build
+#  App  → http://localhost:5000
+# ══════════════════════════════════════════════════════════
+version: "3.9"
+
+services:
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: debate_arena_app
+    ports:
+      - "5000:5000"
+    environment:
+      FLASK_ENV: development
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-changeme_in_production}
+    volumes:
+      # Persist SQLite db across restarts
+      - debate_db:/app/instance
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  debate_db:
