@@ -1,4 +1,6 @@
 from database.db import db
+from datetime import datetime
+
 
 class Debate(db.Model):
 
@@ -12,20 +14,25 @@ class Debate(db.Model):
 
     status = db.Column(db.String(20), default='active')
 
+    # FIX: store creation time
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
     user_id = db.Column(
         db.Integer,
         db.ForeignKey('users.id')
     )
 
+    # FIX: cascade so deleting a debate removes its arguments & votes
     arguments = db.relationship(
         'Argument',
         backref='debate',
-        lazy=True
+        lazy=True,
+        cascade='all, delete-orphan'
     )
 
     votes = db.relationship(
         'Vote',
         backref='debate',
-        lazy=True
+        lazy=True,
+        cascade='all, delete-orphan'
     )
-

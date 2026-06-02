@@ -1,11 +1,11 @@
 from models.user_model import User
 from database.db import db
-from flask_bcrypt import Bcrypt
-from flask_jwt_extended import create_access_token
-from flask_jwt_extended import get_jwt_identity
+from flask_jwt_extended import create_access_token, get_jwt_identity
 
-# Use a single Bcrypt instance tied to the app via current_app context
-bcrypt = Bcrypt()
+# FIX: removed the stray unbound Bcrypt() instance that caused login to fail
+# after restart. Using consistent module-level functions instead.
+from flask_bcrypt import generate_password_hash, check_password_hash
+
 
 def register_service(data):
 
@@ -30,9 +30,12 @@ def register_service(data):
             "message": "Email already exists"
         }, 400
 
-    # Password hashing using app-bound bcrypt
-    from flask import current_app
-    from flask_bcrypt import generate_password_hash
+    # FIX: check username uniqueness
+    if User.query.filter_by(username=username).first():
+
+        return {
+            "message": "Username already taken"
+        }, 400
 
     hashed_password = generate_password_hash(password).decode('utf-8')
 
@@ -50,11 +53,18 @@ def register_service(data):
         "message": "User Registered Successfully"
     }, 201
 
+
 def login_service(data):
 
     email = data.get('email')
 
     password = data.get('password')
+
+    if not email or not password:
+
+        return {
+            "message": "Email and password are required"
+        }, 400
 
     # Find user
     user = User.query.filter_by(email=email).first()
@@ -65,9 +75,7 @@ def login_service(data):
             "message": "Invalid Email"
         }, 401
 
-    # Check password using app-bound bcrypt
-    from flask_bcrypt import check_password_hash
-
+    # FIX: use same module-level check_password_hash — consistent with registration
     password_check = check_password_hash(user.password, password)
 
     if not password_check:
@@ -84,6 +92,7 @@ def login_service(data):
         "token": access_token,
         "username": user.username
     }, 200
+
 
 def profile_service():
 

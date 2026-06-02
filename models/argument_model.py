@@ -1,4 +1,6 @@
 from database.db import db
+from datetime import datetime
+
 
 class Argument(db.Model):
 
@@ -13,12 +15,25 @@ class Argument(db.Model):
         default='opening'
     )
 
+    # FIX: store creation time
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
     debate_id = db.Column(
         db.Integer,
-        db.ForeignKey('debates.id')
+        db.ForeignKey('debates.id'),
+        nullable=False
     )
 
     user_id = db.Column(
         db.Integer,
-        db.ForeignKey('users.id')
+        db.ForeignKey('users.id'),
+        nullable=False
+    )
+
+    # FIX: votes relationship so arguments can be voted on
+    votes = db.relationship(
+        'Vote',
+        backref='argument',
+        lazy=True,
+        cascade='all, delete-orphan'
     )

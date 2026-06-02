@@ -45,6 +45,9 @@ jwt = JWTManager(app)
 # BCRYPT
 # --------------------------------------------------
 
+# FIX: single Bcrypt instance bound to app.
+# auth_service.py previously created its own unbound Bcrypt() which caused
+# password hashing and checking to be inconsistent, breaking login.
 bcrypt = Bcrypt(app)
 
 # --------------------------------------------------
@@ -99,16 +102,55 @@ def join_debate(data):
     )
 
 
+# FIX: send_argument now saves the argument to the database.
+# Previously it only broadcast via WebSocket — arguments were lost on refresh.
 @socketio.on('send_argument')
 def send_argument(data):
 
+    from flask_jwt_extended import decode_token
+
     print("New Argument:", data)
+
+    debate_id = data.get('debate_id')
+    content = data.get('argument')
+    token = data.get('token')
+    round_type = data.get('round_type', 'opening')
+
+    saved = False
+
+    if debate_id and content and token:
+
+        try:
+
+            with app.app_context():
+
+                decoded = decode_token(token)
+                user_id = int(decoded['sub'])
+
+                debate = Debate.query.get(int(debate_id))
+
+                if debate and debate.status == 'active':
+
+                    argument = Argument(
+                        content=content,
+                        round_type=round_type,
+                        debate_id=int(debate_id),
+                        user_id=user_id
+                    )
+
+                    db.session.add(argument)
+                    db.session.commit()
+                    saved = True
+
+        except Exception as e:
+            print("Error saving socket argument:", e)
 
     socketio.emit(
         'receive_argument',
         {
             'username': data.get('username'),
-            'argument': data.get('argument')
+            'argument': content,
+            'saved': saved
         }
     )
 
@@ -123,7 +165,10 @@ with app.app_context():
 # RUN APP
 # --------------------------------------------------
 
-debug=True
-    
-if __name__ == "__main__":
-    socketio.run(app, host="0.0.0.0", port=5000, allow_unsafe_werkzeug=True)
+if __name__ == '__main__':
+    socketio.run(
+        app,
+        host='0.0.0.0',
+        port=5000,
+        debug=True
+    )
