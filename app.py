@@ -54,11 +54,8 @@ bcrypt = Bcrypt(app)
 # SOCKET.IO
 # --------------------------------------------------
 
-socketio = SocketIO(
-    app,
-    cors_allowed_origins="*",
-    async_mode="threading"
-)
+
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="gevent")
 
 # --------------------------------------------------
 # BLUEPRINTS
