@@ -33,3 +33,9 @@ class User(db.Model):
         backref='user',
         lazy=True
     )
+
+    chat_messages = db.relationship(
+        'ChatMessage',
+        backref='sender',
+        lazy=True
+    )
