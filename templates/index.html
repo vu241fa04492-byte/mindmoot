@@ -514,6 +514,7 @@ select option{background:var(--ink2)}
   grid-column:1/-1;
 }
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
 </head>
 <body>
 
@@ -526,6 +527,7 @@ select option{background:var(--ink2)}
   <div class="nav-center">
     <button class="nav-btn active" id="navDebates" onclick="gotoDebates()">Debates</button>
     <button class="nav-btn" id="navProfile" onclick="gotoProfile()" style="display:none">Profile</button>
+    <button class="nav-btn" id="navLeaderboard" onclick="gotoLeaderboard()">🏆 Leaderboard</button>
   </div>
   <div class="nav-right" id="navAuth">
     <button class="btn btn-outline btn-sm" onclick="openM('loginModal')">Sign In</button>
@@ -562,6 +564,16 @@ select option{background:var(--ink2)}
       </div>
       <button class="btn btn-gold btn-sm" id="createDebBtn" onclick="openM('createModal')" style="display:none">+ New Debate</button>
     </div>
+    <div class="search-bar-wrap" style="margin-bottom:20px;display:flex;gap:10px;flex-wrap:wrap">
+      <input id="searchInput" type="text" placeholder="Search debates…" oninput="filterDebates()"
+        style="flex:1;min-width:180px;background:var(--ink3);border:1px solid var(--border2);border-radius:var(--r);padding:9px 14px;color:var(--text);font-family:'Outfit',sans-serif;font-size:.85rem;outline:none"/>
+      <select id="statusFilter" onchange="filterDebates()"
+        style="background:var(--ink3);border:1px solid var(--border2);border-radius:var(--r);padding:9px 14px;color:var(--text);font-family:'Outfit',sans-serif;font-size:.85rem;cursor:pointer">
+        <option value="">All Status</option>
+        <option value="active">Active</option>
+        <option value="closed">Closed</option>
+      </select>
+    </div>
     <div class="debates-grid" id="debatesGrid">
       <div class="loading-center"><div class="spin"></div> Loading debates…</div>
     </div>
@@ -590,6 +602,23 @@ select option{background:var(--ink2)}
       <div class="profile-card" id="profileCard">
         <div class="loading-center"><div class="spin"></div></div>
       </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ══════════════ LEADERBOARD PAGE ══════════════ -->
+<div class="page" id="leaderboardPage">
+  <div class="section-chrome">
+    <div class="section-head">
+      <div class="section-head-left">
+        <span class="section-label">Rankings</span>
+        <h2 class="section-title">🏆 Leaderboard</h2>
+      </div>
+      <button class="btn btn-outline btn-sm" onclick="loadLeaderboard()">↺ Refresh</button>
+    </div>
+    <div id="leaderboardContent" style="margin-top:16px">
+      <div class="loading-center"><div class="spin"></div> Loading…</div>
     </div>
   </div>
 </div>
@@ -680,21 +709,48 @@ select option{background:var(--ink2)}
 let token = localStorage.getItem('dda_token');
 let me    = JSON.parse(localStorage.getItem('dda_user') || 'null');
 let currentDebate = null;
+let allDebates = [];  // ENHANCEMENT 3: cache for client-side filter
 
 /* ── BOOT ── */
 window.addEventListener('DOMContentLoaded', () => {
   refreshNav();
   loadHeroStats();
-  // close overlay on backdrop click
   document.querySelectorAll('.overlay').forEach(o =>
     o.addEventListener('click', e => { if(e.target===o) o.classList.remove('open'); })
   );
-  // enter key on login/register
   ['logPass','regPass'].forEach(id => {
     const el = document.getElementById(id);
     if(el) el.addEventListener('keydown', e => { if(e.key==='Enter'){ id==='logPass'?doLogin():doRegister(); }});
   });
+  // ENHANCEMENT 1: init SocketIO
+  initSocket();
 });
+
+/* ── ENHANCEMENT 1: LIVE VOTE SOCKET ── */
+let socket;
+function initSocket() {
+  socket = io();
+  socket.on('vote_update', (data) => {
+    // Update vote display if we're on that debate's detail page
+    const bar = document.getElementById('liveVoteBar');
+    if(bar && currentDebate === data.debate_id) {
+      const total = data.total_votes;
+      const pct = total ? Math.round(data.votes_for / total * 100) : 50;
+      document.getElementById('liveVoteFor').textContent = data.votes_for;
+      document.getElementById('liveVoteAgainst').textContent = data.votes_against;
+      document.getElementById('liveVoteBarInner').style.width = pct + '%';
+      document.getElementById('liveVotePct').textContent = pct + '% in favour · ' + total + ' total votes';
+      // Flash
+      bar.style.outline = '2px solid var(--gold)';
+      setTimeout(() => bar.style.outline = 'none', 600);
+    }
+    // Also update card in debates list if visible
+    const cardFor = document.getElementById('card-for-' + data.debate_id);
+    const cardAgainst = document.getElementById('card-against-' + data.debate_id);
+    if(cardFor) cardFor.textContent = data.votes_for + ' For';
+    if(cardAgainst) cardAgainst.textContent = data.votes_against + ' Against';
+  });
+}
 
 /* ── NAV ── */
 function refreshNav() {
@@ -718,7 +774,10 @@ function refreshNav() {
   }
 }
 function setActiveNav(id) {
-  ['navDebates','navProfile'].forEach(n => document.getElementById(n).classList.remove('active'));
+  ['navDebates','navProfile','navLeaderboard'].forEach(n => {
+    const el = document.getElementById(n);
+    if(el) el.classList.remove('active');
+  });
   if(id) document.getElementById(id).classList.add('active');
 }
 
@@ -737,6 +796,12 @@ function gotoProfile() {
   showPage('profilePage');
   setActiveNav('navProfile');
   loadProfile();
+}
+// ENHANCEMENT 2: Leaderboard page routing
+function gotoLeaderboard() {
+  showPage('leaderboardPage');
+  setActiveNav('navLeaderboard');
+  loadLeaderboard();
 }
 
 /* ── MODALS ── */
@@ -804,26 +869,46 @@ async function loadHeroStats() {
 async function loadDebates() {
   document.getElementById('debatesGrid').innerHTML=`<div class="loading-center"><div class="spin"></div> Loading…</div>`;
   const {ok,data}=await api('GET','/debates');
-  if(!ok||!Array.isArray(data)||!data.length){
-    document.getElementById('debatesGrid').innerHTML=`
-      <div class="empty">
-        <div class="empty-icon">🗣</div>
-        <div class="empty-msg">No debates yet.<br/>Be the first to start one.</div>
-      </div>`;
+  if(!ok||!Array.isArray(data)){
+    document.getElementById('debatesGrid').innerHTML=`<div class="empty"><div class="empty-icon">🗣</div><div class="empty-msg">No debates yet.<br/>Be the first to start one.</div></div>`;
     return;
   }
-  document.getElementById('debatesGrid').innerHTML=data.map(d=>`
+  allDebates = data; // ENHANCEMENT 3: cache for filtering
+  renderDebates(data);
+}
+
+// ENHANCEMENT 3: client-side search & filter
+function filterDebates() {
+  const q = document.getElementById('searchInput').value.trim().toLowerCase();
+  const st = document.getElementById('statusFilter').value;
+  let filtered = allDebates;
+  if(q) filtered = filtered.filter(d => (d.topic||'').toLowerCase().includes(q) || (d.description||'').toLowerCase().includes(q));
+  if(st) filtered = filtered.filter(d => d.status === st);
+  renderDebates(filtered);
+}
+
+function renderDebates(debates) {
+  if(!debates.length){
+    document.getElementById('debatesGrid').innerHTML=`<div class="empty"><div class="empty-icon">🔍</div><div class="empty-msg">No debates match your search.</div></div>`;
+    return;
+  }
+  document.getElementById('debatesGrid').innerHTML=debates.map(d=>`
     <div class="debate-card" onclick="gotoDetail(${d.id})">
       <div class="card-top">
         <span class="status-pill ${d.status==='active'?'status-active':'status-closed'}">
           ${d.status==='active'?'<span class="pulse"></span>':''}${d.status}
         </span>
+        <span style="font-size:.78rem;color:var(--text3)">🗳 ${(d.total_votes||0)} votes</span>
       </div>
       <div class="card-topic">${esc(d.topic)}</div>
       <div class="card-desc">${esc(d.description||'No description provided.')}</div>
+      <div style="display:flex;gap:8px;margin:8px 0;font-size:.78rem">
+        <span id="card-for-${d.id}" style="color:var(--sage)">▲ ${d.votes_for||0} For</span>
+        <span id="card-against-${d.id}" style="color:var(--crimson)">▼ ${d.votes_against||0} Against</span>
+      </div>
       <div class="card-foot">
         <div class="card-author">
-          <div class="author-dot">${esc(d.created_by[0].toUpperCase())}</div>
+          <div class="author-dot">${esc((d.created_by||'?')[0].toUpperCase())}</div>
           <span>${esc(d.created_by)}</span>
         </div>
         <div class="card-actions" onclick="event.stopPropagation()">
@@ -841,6 +926,9 @@ async function loadDebates() {
 /* ── DEBATE DETAIL ── */
 async function gotoDetail(id) {
   currentDebate=id;
+  // ENHANCEMENT 1: join socket room for this debate
+  if(socket) socket.emit('join_debate', {debate_id: id});
+
   showPage('detailPage');
   setActiveNav('navDebates');
   document.getElementById('detailContent').innerHTML=`<div class="loading-center"><div class="spin"></div> Loading debate…</div>`;
@@ -880,6 +968,7 @@ async function gotoDetail(id) {
               <div class="arg-meta">
                 <span class="arg-username">@${esc(a.username)}</span>
                 <span class="arg-round">${esc(a.round_type)}</span>
+                ${a.vote_count ? `<span style="color:var(--gold);font-size:.78rem">🗳 ${a.vote_count} votes</span>` : ''}
               </div>
               <div class="arg-content">${esc(a.content)}</div>
             </div>
@@ -891,26 +980,26 @@ async function gotoDetail(id) {
         </div>
       </div>
       <div>
-        <div class="sidebar-card">
-          <div class="sidebar-label">Results</div>
+        <div class="sidebar-card" id="liveVoteBar">
+          <div class="sidebar-label">Live Results <span style="color:var(--sage);font-size:.72rem">● LIVE</span></div>
           <div class="vote-numbers">
             <div class="vote-box for-box">
-              <div class="vote-count">${r.votes_for||0}</div>
+              <div class="vote-count" id="liveVoteFor">${r.votes_for||0}</div>
               <div class="vote-lbl">For</div>
             </div>
             <div class="vote-box against-box">
-              <div class="vote-count">${r.votes_against||0}</div>
+              <div class="vote-count" id="liveVoteAgainst">${r.votes_against||0}</div>
               <div class="vote-lbl">Against</div>
             </div>
           </div>
-          <div class="vote-bar-wrap"><div class="vote-bar-inner" style="width:${pct}%"></div></div>
-          <div class="vote-pct">${pct}% in favour · ${total} total votes</div>
+          <div class="vote-bar-wrap"><div class="vote-bar-inner" id="liveVoteBarInner" style="width:${pct}%"></div></div>
+          <div class="vote-pct" id="liveVotePct">${pct}% in favour · ${total} total votes</div>
           ${token?`
             <div class="sidebar-actions">
               <button class="btn btn-gold btn-full btn-sm" onclick="openVoteModal(${d.id})">Cast Your Vote</button>
               <button class="btn btn-ghost btn-full btn-sm" onclick="openArgModal(${d.id})">Submit Argument</button>
             </div>
-          `:``}
+          `:''}
         </div>
       </div>
     </div>
@@ -959,8 +1048,55 @@ async function doVote(type) {
   const debate_id=parseInt(document.getElementById('voteDebId').value);
   const {ok,data}=await api('POST','/vote',{debate_id,vote_type:type});
   closeM('voteModal');
-  if(ok){toast('Vote cast!','ok');if(currentDebate===debate_id)gotoDetail(debate_id);}
+  if(ok){toast('Vote cast!','ok');}
   else toast(data.message||'Could not vote','err');
+  // Note: live update comes via socket, no need to reload page
+}
+
+/* ── ENHANCEMENT 2: LEADERBOARD ── */
+async function loadLeaderboard() {
+  document.getElementById('leaderboardContent').innerHTML=`<div class="loading-center"><div class="spin"></div> Loading…</div>`;
+  const {ok,data}=await api('GET','/leaderboard?limit=20');
+  if(!ok||!data.leaderboard||!data.leaderboard.length){
+    document.getElementById('leaderboardContent').innerHTML=`
+      <div class="empty"><div class="empty-icon">🏆</div><div class="empty-msg">No rankings yet.<br/>Start debating to appear here!</div></div>`;
+    return;
+  }
+  const medals = ['🥇','🥈','🥉'];
+  document.getElementById('leaderboardContent').innerHTML=`
+    <table style="width:100%;border-collapse:collapse;font-size:.88rem">
+      <thead>
+        <tr style="color:var(--text3);font-size:.75rem;text-transform:uppercase;letter-spacing:.08em">
+          <th style="padding:8px 12px;text-align:left">Rank</th>
+          <th style="padding:8px 12px;text-align:left">Debater</th>
+          <th style="padding:8px 12px;text-align:right">Votes Received</th>
+          <th style="padding:8px 12px;text-align:right">Debates</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${data.leaderboard.map(row=>`
+          <tr style="border-top:1px solid var(--border);transition:background .15s" 
+              onmouseover="this.style.background='var(--ink3)'" onmouseout="this.style.background=''">
+            <td style="padding:12px;font-size:1.1rem">${medals[row.rank-1]||'#'+row.rank}</td>
+            <td style="padding:12px">
+              <div style="display:flex;align-items:center;gap:10px">
+                <div style="width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,var(--gold),var(--crimson));display:grid;place-items:center;font-weight:600;font-size:.85rem">
+                  ${esc(row.username[0].toUpperCase())}
+                </div>
+                <span style="font-weight:500;color:var(--text)">${esc(row.username)}</span>
+                ${row.rank===1?'<span style="font-size:.7rem;background:var(--gold);color:#000;padding:2px 7px;border-radius:99px;font-weight:600">Champion</span>':''}
+              </div>
+            </td>
+            <td style="padding:12px;text-align:right;font-weight:600;color:var(--gold)">${row.total_votes_received}</td>
+            <td style="padding:12px;text-align:right;color:var(--text2)">${row.debates_participated}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+    <div style="margin-top:12px;font-size:.75rem;color:var(--text3);text-align:right">
+      Ranked by total votes received on arguments · Updated on load
+    </div>
+  `;
 }
 
 /* ── PROFILE ── */

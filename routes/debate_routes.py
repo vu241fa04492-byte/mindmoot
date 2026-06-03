@@ -1,4 +1,4 @@
-from flask import Blueprint, request
+from flask import Blueprint, request, current_app
 
 from flask_jwt_extended import (
     jwt_required,
@@ -13,10 +13,12 @@ from services.debate_service import (
     submit_argument_service,
     get_debate_arguments_service,
     vote_debate_service,
-    debate_results_service
+    debate_results_service,
+    get_leaderboard_service
 )
 
 debate_bp = Blueprint('debate_bp', __name__)
+
 
 # ---------------- CREATE DEBATE ----------------
 
@@ -48,14 +50,10 @@ def create_debate():
     """
     data = request.json
     current_user = get_jwt_identity()
-
-    return create_debate_service(
-        data,
-        current_user
-    )
+    return create_debate_service(data, current_user)
 
 
-# ---------------- GET ALL DEBATES ----------------
+# ---------------- GET ALL DEBATES (with Search & Filter) ----------------
 
 @debate_bp.route('/debates', methods=['GET'])
 def get_all_debates():
@@ -64,11 +62,29 @@ def get_all_debates():
     ---
     tags:
       - Debates
+    parameters:
+      - name: search
+        in: query
+        type: string
+        description: Keyword search in topic or description
+      - name: status
+        in: query
+        type: string
+        description: Filter by status (active/closed)
+      - name: topic
+        in: query
+        type: string
+        description: Filter by topic keyword
     responses:
       200:
         description: List of all debates
     """
-    return get_all_debates_service()
+    # ENHANCEMENT 3: read query params for search/filter
+    search = request.args.get('search')
+    status = request.args.get('status')
+    topic = request.args.get('topic')
+
+    return get_all_debates_service(search=search, status=status, topic=topic)
 
 
 # ---------------- GET SINGLE DEBATE ----------------
@@ -89,9 +105,7 @@ def get_single_debate(debate_id):
       200:
         description: Debate details
     """
-    return get_single_debate_service(
-        debate_id
-    )
+    return get_single_debate_service(debate_id)
 
 
 # ---------------- DELETE DEBATE ----------------
@@ -116,11 +130,7 @@ def delete_debate(debate_id):
         description: Debate deleted successfully
     """
     current_user = get_jwt_identity()
-
-    return delete_debate_service(
-        debate_id,
-        current_user
-    )
+    return delete_debate_service(debate_id, current_user)
 
 
 # ---------------- SUBMIT ARGUMENT ----------------
@@ -150,21 +160,13 @@ def submit_argument():
         description: Argument submitted successfully
     """
     data = request.json
-
     current_user = get_jwt_identity()
-
-    return submit_argument_service(
-        data,
-        current_user
-    )
+    return submit_argument_service(data, current_user)
 
 
 # ---------------- GET DEBATE ARGUMENTS ----------------
 
-@debate_bp.route(
-    '/debates/<int:debate_id>/arguments',
-    methods=['GET']
-)
+@debate_bp.route('/debates/<int:debate_id>/arguments', methods=['GET'])
 def get_debate_arguments(debate_id):
     """
     Get Debate Arguments
@@ -180,9 +182,7 @@ def get_debate_arguments(debate_id):
       200:
         description: List of debate arguments
     """
-    return get_debate_arguments_service(
-        debate_id
-    )
+    return get_debate_arguments_service(debate_id)
 
 
 # ---------------- VOTE API ----------------
@@ -205,26 +205,25 @@ def vote_debate():
           properties:
             argument_id:
               type: integer
+            debate_id:
+              type: integer
+            vote_type:
+              type: string
     responses:
       201:
         description: Vote submitted successfully
     """
     data = request.json
-
     current_user = get_jwt_identity()
 
-    return vote_debate_service(
-        data,
-        current_user
-    )
+    # ENHANCEMENT 1: pass socketio so vote_debate_service can broadcast
+    socketio = current_app.extensions.get('socketio')
+    return vote_debate_service(data, current_user, socketio=socketio)
 
 
 # ---------------- RESULTS API ----------------
 
-@debate_bp.route(
-    '/debates/<int:debate_id>/results',
-    methods=['GET']
-)
+@debate_bp.route('/debates/<int:debate_id>/results', methods=['GET'])
 def debate_results(debate_id):
     """
     Debate Results
@@ -240,6 +239,27 @@ def debate_results(debate_id):
       200:
         description: Debate results and winner
     """
-    return debate_results_service(
-        debate_id
-    )
+    return debate_results_service(debate_id)
+
+
+# ---------------- LEADERBOARD API ----------------
+
+@debate_bp.route('/leaderboard', methods=['GET'])
+def leaderboard():
+    """
+    User Leaderboard
+    ---
+    tags:
+      - Leaderboard
+    parameters:
+      - name: limit
+        in: query
+        type: integer
+        description: Number of top users to return (default 10)
+    responses:
+      200:
+        description: Top debaters ranked by votes received
+    """
+    # ENHANCEMENT 2: leaderboard endpoint
+    limit = request.args.get('limit', 10, type=int)
+    return get_leaderboard_service(limit=limit)

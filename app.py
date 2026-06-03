@@ -1,7 +1,7 @@
 from flask import Flask, render_template
 from flasgger import Swagger
 from flask_jwt_extended import JWTManager
-from flask_socketio import SocketIO
+from flask_socketio import SocketIO, join_room, leave_room
 from flask_bcrypt import Bcrypt
 
 from config import Config
@@ -20,7 +20,6 @@ from models.vote_model import Vote
 # --------------------------------------------------
 
 app = Flask(__name__)
-
 app.config.from_object(Config)
 
 # --------------------------------------------------
@@ -45,17 +44,20 @@ jwt = JWTManager(app)
 # BCRYPT
 # --------------------------------------------------
 
-# FIX: single Bcrypt instance bound to app.
-# auth_service.py previously created its own unbound Bcrypt() which caused
-# password hashing and checking to be inconsistent, breaking login.
 bcrypt = Bcrypt(app)
 
 # --------------------------------------------------
 # SOCKET.IO
 # --------------------------------------------------
 
+socketio = SocketIO(
+    app,
+    cors_allowed_origins="*",
+    async_mode="threading"
+)
 
-socketio = SocketIO(app, cors_allowed_origins="*")
+# ENHANCEMENT 1: Store socketio on app.extensions so routes can access it
+app.extensions['socketio'] = socketio
 
 # --------------------------------------------------
 # BLUEPRINTS
@@ -86,24 +88,34 @@ def handle_disconnect():
     print("User Disconnected")
 
 
+# ENHANCEMENT 1: join debate room so vote_update is scoped per debate
 @socketio.on('join_debate')
 def join_debate(data):
-
-    print("User Joined Debate Room")
+    debate_id = data.get('debate_id')
+    if debate_id:
+        room = f"debate_{debate_id}"
+        join_room(room)
+        print(f"User joined room: {room}")
 
     socketio.emit(
         'join_message',
-        {
-            'message': 'A user joined the debate'
-        }
+        {'message': 'A user joined the debate'},
+        room=f"debate_{debate_id}" if debate_id else None
     )
 
 
-# FIX: send_argument now saves the argument to the database.
-# Previously it only broadcast via WebSocket — arguments were lost on refresh.
+# ENHANCEMENT 1: leave debate room
+@socketio.on('leave_debate')
+def leave_debate(data):
+    debate_id = data.get('debate_id')
+    if debate_id:
+        room = f"debate_{debate_id}"
+        leave_room(room)
+        print(f"User left room: {room}")
+
+
 @socketio.on('send_argument')
 def send_argument(data):
-
     from flask_jwt_extended import decode_token
 
     print("New Argument:", data)
@@ -116,25 +128,20 @@ def send_argument(data):
     saved = False
 
     if debate_id and content and token:
-
         try:
-
             with app.app_context():
-
                 decoded = decode_token(token)
                 user_id = int(decoded['sub'])
 
                 debate = Debate.query.get(int(debate_id))
 
                 if debate and debate.status == 'active':
-
                     argument = Argument(
                         content=content,
                         round_type=round_type,
                         debate_id=int(debate_id),
                         user_id=user_id
                     )
-
                     db.session.add(argument)
                     db.session.commit()
                     saved = True
@@ -148,7 +155,8 @@ def send_argument(data):
             'username': data.get('username'),
             'argument': content,
             'saved': saved
-        }
+        },
+        room=f"debate_{debate_id}" if debate_id else None
     )
 
 # --------------------------------------------------
@@ -167,6 +175,5 @@ if __name__ == '__main__':
         app,
         host='0.0.0.0',
         port=5000,
-        debug=False,
-        allow_unsafe_werkzeug=True
+        debug=True
     )
